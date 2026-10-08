@@ -1,0 +1,68 @@
+name: J320G A11 Kernel Build
+
+on:
+  push:
+    branches: [j320g-a11-kernel-build]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kernel
+        uses: actions/checkout@v4
+        with:
+          repository: j3-16/android_kernel_samsung_sharkls
+          ref: 048746da5c0c1a053e7bbcce2ef3303549303b28
+          path: kernel
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev cpio
+      - name: Install ARM EABI 4.8
+        run: |
+          git clone --depth 1 --branch android-6.0.1_r32 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.8 /opt/arm-eabi-4.8
+          echo "PATH=/opt/arm-eabi-4.8/bin:$PATH" >> "$GITHUB_ENV"
+      - name: Verify source and defconfig
+        run: |
+          test -f kernel/arch/arm/configs/j3xlte_defconfig
+          test -f kernel/arch/arm/boot/dts/sprd-scx35l_sharkls_j3xlte_rev07.dts
+          grep -n "j3xlte" kernel/arch/arm/configs/j3xlte_defconfig | head
+      - name: Build j3xlte zImage and DTB
+        working-directory: kernel
+        run: |
+          make O=../out ARCH=arm CROSS_COMPILE=arm-eabi- j3xlte_defconfig
+          make O=../out ARCH=arm CROSS_COMPILE=arm-eabi- -j2 zImage sprd-scx35l_sharkls_j3xlte_rev07.dtb
+      - name: Validate artifacts
+        run: |
+          test -s out/arch/arm/boot/zImage
+          test -s out/arch/arm/boot/dts/sprd-scx35l_sharkls_j3xlte_rev07.dtb
+          file out/arch/arm/boot/zImage
+          file out/arch/arm/boot/dts/sprd-scx35l_sharkls_j3xlte_rev07.dtb
+          sha256sum out/arch/arm/boot/zImage out/arch/arm/boot/dts/sprd-scx35l_sharkls_j3xlte_rev07.dtb
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("out/arch/arm/boot/zImage")
+          b=p.read_bytes()[:4]
+          assert p.stat().st_size > 100000, "zImage unexpectedly small"
+          print("zImage size:", p.stat().st_size)
+          print("zImage prefix:", b.hex())
+          print("KERNEL_ARTIFACT_PASS")
+          d=Path("out/arch/arm/boot/dts/sprd-scx35l_sharkls_j3xlte_rev07.dtb").read_bytes()
+          assert d[:4] == bytes.fromhex("d00dfeed"), "DTB magic mismatch"
+          print("DTB size:", len(d))
+          print("DTB_MAGIC_PASS")
+          PY
+      - name: Package
+        run: |
+          mkdir -p artifact
+          cp out/arch/arm/boot/zImage artifact/zImage-j3xlte
+          cp out/arch/arm/boot/dts/sprd-scx35l_sharkls_j3xlte_rev07.dtb artifact/j3xlte-rev07.dtb
+          sha256sum artifact/* > artifact/SHA256SUMS.txt
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: j320g-a11-kernel-artifacts
+          path: artifact/
